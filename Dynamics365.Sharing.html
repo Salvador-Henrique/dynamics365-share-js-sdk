@@ -1,0 +1,623 @@
+<!DOCTYPE html>
+<html lang="pt-br" xmlns="http://www.w3.org/1999/xhtml">
+<head>
+    <meta charset="utf-8" />
+    <title>Compartilhamento</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.1/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-+0n0xVW2eSR5OomGNYDnhzAbDsOXxcvSN1TPprVMTNDbiYZCxYbOOl7+AMvyTG2x" crossorigin="anonymous">
+    <link href="https://stackpath.bootstrapcdn.com/font-awesome/4.7.0/css/font-awesome.min.css" rel="stylesheet" integrity="sha384-wvfXpqpZZVQGK6TAh5PVlGOfQNHSoD2xbE+QkPxCAFlNEevoEH3Sl0sibVcOQVnN" crossorigin="anonymous">
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.2.1/jquery.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.1/dist/js/bootstrap.bundle.min.js" integrity="sha384-gtEjrD/SeCtmISkJkNUaaKMoLD0//ElJ19smozuHV6z3Iehds+3Ulb9Bn9Plx0x4" crossorigin="anonymous"></script>
+    <script src="https://ajax.googleapis.com/ajax/libs/angularjs/1.7.8/angular.min.js"></script>
+    <style>
+        .fixed_header tbody {
+            display: block;
+            overflow: auto;
+            height: 250px;
+            width: 100%;
+        }
+
+        .fixed_header thead tr {
+            display: block;
+        }
+
+        .loader {
+            border: 16px solid #f3f3f3;
+            border-radius: 50%;
+            border-top: 16px solid #3498db;
+            width: 120px;
+            height: 120px;
+            -webkit-animation: spin 2s linear infinite; /* Safari */
+            animation: spin 2s linear infinite;
+        }
+        /* Safari */
+        @-webkit-keyframes spin {
+            0% {
+                -webkit-transform: rotate(0deg);
+            }
+
+            100% {
+                -webkit-transform: rotate(360deg);
+            }
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+    </style>
+    <script>
+        var app = angular.module("app", []);
+
+        app.controller("share", ["$scope", function ($scope) {
+            $scope.entidadeAlvo = {};
+            $scope.listaDeAcessos = [];
+            $scope.listaDeUsuarios = [];
+            $scope.listaDeEquipes = [];
+            $scope.selecionados = [];
+            $scope.qtdSelecionado = 0;
+
+            $scope.onLoad = function () {
+                //var userSettings = parent.Xrm.Utility.getGlobalContext().userSettings;
+                var params = new URLSearchParams(window.location.search);
+                if (params.has('data'))
+                    $scope.entidadeAlvo = JSON.parse(params.get('data'));
+
+                $scope.listarCompartilhamentos();
+            };
+
+            $scope.listarCompartilhamentos = function () {
+                try {
+                    $("#loading").show();
+                    var target = {};
+                    target.id = $scope.entidadeAlvo.ids[0];
+                    target.entityPluralName = $scope.entidadeAlvo.type + "s";
+
+                    var req = parent.Xrm.Page.context.getClientUrl() + '/api/data/v9.0/RetrieveSharedPrincipalsAndAccess(Target=@Target)?@Target={"@odata.id":"' + target.entityPluralName + '(' + target.id + ')"}';
+
+                    fetch(req).then(response => {
+                        var results = response.json();
+                        return results;
+                    }).then(results => {
+                        $scope.listaDeAcessos = [];
+
+                        for (var i in results.PrincipalAccesses) {
+                            let acesso = results.PrincipalAccesses[i];
+                            let type = acesso.Principal['@odata.type'].includes('systemuser') ? 'systemuser' : 'team';
+
+                            $scope.obterUsuario(acesso.Principal.ownerid, type).then(function (principalName) {
+
+                                $scope.listaDeAcessos.push({
+                                    id: acesso.Principal.ownerid,
+                                    name: principalName,
+                                    type,
+                                    read: acesso.AccessMask.includes('ReadAccess'),
+                                    write: acesso.AccessMask.includes('WriteAccess'),
+                                    delete: acesso.AccessMask.includes('DeleteAccess'),
+                                    add: acesso.AccessMask.includes('Append'),
+                                    assign: acesso.AccessMask.includes('AssignAccess'),
+                                    share: acesso.AccessMask.includes('ShareAccess')
+                                });
+
+                                $scope.$apply();
+                            });
+                        }
+
+                        $("#loading").hide();
+                    }).catch(function (error) {
+                        $("#loading").hide();
+                        parent.Xrm.Navigation.openAlertDialog({
+                            confirmButtonLabel: "OK",
+                            text: error.message,
+                            title: "Error"
+                        });
+                    });
+
+                } catch (e) {
+                    console.log(e);
+                }
+            };
+
+            $scope.compartilhar = function () {
+                if ($scope.listaDeAcessos.length < 0) {
+                    alert('Nenhum dado selecionado para compartilhar');
+                    return;
+                }
+
+                for (var i in $scope.listaDeAcessos) {
+                    let acesso = $scope.listaDeAcessos[i];
+                    if (acesso.acessoConcedido)
+                        $scope.atualizarAcesso(acesso);
+                    else
+                        $scope.concederAcesso(acesso);
+                }
+            };
+
+            $scope.concederAcesso = function (acesso) {
+                try {
+                    $("#loading").show();
+
+                    var target = { "@odata.type": "Microsoft.Dynamics.CRM." + $scope.entidadeAlvo.type };
+                    target[$scope.entidadeAlvo.type + "id"] = $scope.entidadeAlvo.ids[0];
+
+                    let principal = { "@odata.type": "Microsoft.Dynamics.CRM." + acesso.type };
+                    principal[acesso.type + "id"] = acesso.id;
+
+                    let acessos = (acesso.read ? "ReadAccess" : "");
+                    acessos += (acesso.write ? ", WriteAccess" : "");
+                    acessos += (acesso.delete ? ", DeleteAccess" : "");
+                    acessos += (acesso.add ? ", AppendAccess, AppendToAccess" : "");
+                    acessos += (acesso.assign ? ", AssignAccess" : "");
+                    acessos += (acesso.share ? ", ShareAccess" : "");
+
+                    var principalAccess = {
+                        "Principal": principal,
+                        "AccessMask": acessos //full list of privileges is "ReadAccess, WriteAccess, AppendAccess, AppendToAccess, CreateAccess, DeleteAccess, ShareAccess, AssignAccess"
+                    };
+
+                    var parameters = { "Target": target, "PrincipalAccess": principalAccess };
+                    sendPostApi("GrantAccess", parameters, function (response) {
+                        if (response.responseText != "") {
+                            alert('Falha ao conceder acesso, ' + response.responseText);
+                        }
+                        else
+                            acesso.acessoConcedido = true;
+
+                        $("#loading").hide();
+                    });
+
+                } catch (e) {
+                    console.log(e);
+                }
+            };
+
+            $scope.removerAcesso = function (acesso) {
+                try {
+                    $("#loading").show();
+
+                    var target = { "@odata.type": "Microsoft.Dynamics.CRM." + $scope.entidadeAlvo.type };
+                    target[$scope.entidadeAlvo.type + "id"] = $scope.entidadeAlvo.ids[0];
+
+                    let revokee = { "@odata.type": "Microsoft.Dynamics.CRM." + acesso.type };
+                    revokee[acesso.type + "id"] = acesso.id;
+
+                    var parameters = { "Target": target, "Revokee": revokee };
+
+                    sendPostApi("RevokeAccess", parameters, function (response) {
+                        if (response.responseText != "") {
+                            alert('Falha ao remover acesso, ' + response.responseText);
+                        }
+                        else {
+                            let index = $scope.listaDeAcessos.findIndex(x => { return x.id == acesso.id });
+                            if (index > -1) {
+                                $scope.listaDeAcessos.splice(index, 1);
+                                $scope.$apply();
+                            }
+                        }
+                        $("#loading").hide();
+                    });
+                } catch (e) {
+                    console.log(e);
+                }
+            };
+
+            $scope.atualizarAcesso = function (acesso) {
+                try {
+                    $("#loading").show();
+
+                    var target = { "@odata.type": "Microsoft.Dynamics.CRM." + $scope.entidadeAlvo.type };
+                    target[$scope.entidadeAlvo.type + "id"] = $scope.entidadeAlvo.ids[0];
+
+                    let principal = { "@odata.type": "Microsoft.Dynamics.CRM." + acesso.type };
+                    principal[acesso.type + "id"] = acesso.id;
+
+                    let acessos = (acesso.read ? "ReadAccess" : "");
+                    acessos += (acesso.write ? ", WriteAccess" : "");
+                    acessos += (acesso.delete ? ", DeleteAccess" : "");
+                    acessos += (acesso.add ? ", AppendAccess, AppendToAccess" : "");
+                    acessos += (acesso.assign ? ", AssignAccess" : "");
+                    acessos += (acesso.share ? ", ShareAccess" : "");
+
+                    var principalAccess = {
+                        "Principal": principal,
+                        "AccessMask": acessos //full list of privileges is "ReadAccess, WriteAccess, AppendAccess, AppendToAccess, CreateAccess, DeleteAccess, ShareAccess, AssignAccess"
+                    };
+
+                    var parameters = { "Target": target, "PrincipalAccess": principalAccess };
+                    sendPostApi("ModifyAccess", parameters, function (response) {
+                        if (response.responseText != "") {
+                            alert('Falha ao atualizar acesso, ' + response.responseText);
+                        }
+                        $("#loading").hide();
+                    });
+                } catch (e) {
+                    console.log(e);
+                }
+            };
+
+            $scope.obterUsuario = function (id, type) {
+                return new Promise((resolve, reject) => {
+                    let filtro = "?$select=fullname,internalemailaddress&$filter=isdisabled eq false";
+                    if (type == 'team')
+                        filtro = "?$select=name&$filter=teamtype eq 0";
+
+                    parent.Xrm.WebApi.retrieveRecord(type, id, filtro).then(
+                        function success(result) {
+                            resolve(type == 'team' ? resolve(result.name) : result.fullname);
+                        },
+                        function (error) {
+                            console.log(error.message);
+                            reject(error);
+                        });
+                });
+            };
+
+            $scope.listarUsuarios = function () {
+                $scope.tipoRegistro = 'USER';
+                if ($scope.listaDeUsuarios.length > 1) return;
+                $("#loading").show();
+
+                parent.Xrm.WebApi.retrieveMultipleRecords("systemuser", "?$select=fullname,internalemailaddress&$filter=isdisabled eq false").then(
+                    function success(result) {
+                        $scope.listaDeUsuarios = result.entities;
+                        $scope.$apply();
+                        $("#loading").hide();
+                    },
+                    function (error) {
+                        console.log(error.message);
+                        $("#loading").hide();
+                    }
+                );
+            };
+
+            $scope.listarEquipes = function () {
+                $scope.tipoRegistro = 'TEAM';
+                if ($scope.listaDeEquipes.length > 1) return;
+                $("#loading").show();
+
+                parent.Xrm.WebApi.retrieveMultipleRecords("team", "?$select=name&$filter=teamtype eq 0").then(
+                    function success(result) {
+                        $scope.listaDeEquipes = result.entities;
+                        $scope.$apply();
+                        $("#loading").hide();
+                    },
+                    function (error) {
+                        console.log(error.message);
+                        $("#loading").hide();
+                    }
+                );
+            };
+
+            $scope.addUsers = function () {
+                $scope.listarUsuarios();
+
+                var myModal = new bootstrap.Modal(document.getElementById('modalConsultar'));
+                myModal.show();
+            };
+
+            $scope.associarRegistros = function (cancelar) {
+                if (cancelar) {
+                    $('#close_modal').click();
+                    return;
+                }
+                if ($scope.selecionados.length < 1) {
+                    alert('Selecione ao menos 1 registro ou clique em Cancelar');
+                    return;
+                }
+
+                for (var i in $scope.selecionados) {
+                    var lista = $scope.selecionados[i];
+                    for (var j in lista) {
+                        let registro = lista[j];
+
+                        let type = registro.systemuserid ? 'systemuser' : 'team';
+                        let name = registro.name ? registro.name : registro.fullname;
+                        let id = registro.systemuserid ? registro.systemuserid : registro.teamid;
+
+                        if (!$scope.listaDeAcessos.find(x => { return x.id == id }))
+                            $scope.listaDeAcessos.push({ id, name, type, read: false, write: false, delete: false, add: false, assign: false, share: false });
+                    }
+                }
+
+                $('#close_modal').click();
+            };
+
+            $scope.validarSelecao = function (item) {
+                if (item.delete && !item.write) item.write = true;
+                if (item.write && !item.read) item.read = true;
+                if (item.add && !item.read) item.read = true;
+                if (item.assign && !item.read) item.read = true;
+                if (item.share && !item.read) item.read = true;
+            };
+
+            $scope.selecionarTudo = function () {
+                for (var i in $scope.listaDeAcessos) {
+                    $scope.listaDeAcessos[i].selecionado = $scope.selecionar_tudo;
+                }
+            };
+
+            $scope.removerSelecao = function () {
+                if ($scope.listaDeAcessos.length < 0 || $scope.listaDeAcessos.filter(x => { return x.selecionado }).length < 1) {
+                    alert('Nenhum registro selecionado para remover');
+                    return;
+                }
+
+                var confirmStrings = { text: "Ao confirmar o compartilhamento dos registros selecionados será removido.", title: "Deseja prosseguir?" };
+                var confirmOptions = { height: 200, width: 450 };
+                parent.Xrm.Navigation.openConfirmDialog(confirmStrings, confirmOptions).then(
+                    function (success) {
+                        if (success.confirmed) {
+                            let selecionados = $scope.listaDeAcessos.filter(x => { return x.selecionado });
+                            for (var i in selecionados) {
+                                $scope.removerAcesso(selecionados[i]);
+                            }
+                        }
+                    });
+            };
+
+            $scope.removerTodos = function () {
+                if ($scope.listaDeAcessos.length < 0) {
+                    alert('Nenhum registro para remover');
+                    return;
+                }
+
+                var confirmStrings = { text: "Ao confirmar todo compartilhamento será removido.", title: "Deseja prosseguir?" };
+                var confirmOptions = { height: 200, width: 450 };
+                parent.Xrm.Navigation.openConfirmDialog(confirmStrings, confirmOptions).then(
+                    function (success) {
+                        if (success.confirmed) {
+                            for (var i in $scope.listaDeAcessos) {
+                                $scope.removerAcesso($scope.listaDeAcessos[i]);
+                            }
+                        }
+                    });
+            };
+
+            $scope.obterSelecionados = function () {
+                $scope.selecionados = [];
+
+                if ($scope.listaDeUsuarios.filter(x => { return x.selecionado }).length > 0)
+                    $scope.selecionados.push($scope.listaDeUsuarios.filter(x => { return x.selecionado }));
+
+                if ($scope.listaDeEquipes.filter(x => { return x.selecionado }).length > 0)
+                    $scope.selecionados.push($scope.listaDeEquipes.filter(x => { return x.selecionado }));
+
+                $scope.qtdSelecionado = $scope.listaDeUsuarios.filter(x => { return x.selecionado }).length;
+                $scope.qtdSelecionado += $scope.listaDeEquipes.filter(x => { return x.selecionado }).length;
+            };
+
+            function sendPostApi(action, data, callback) {
+                var context = parent.Xrm.Page.context;
+
+                var req = new XMLHttpRequest();
+                req.open("POST", context.getClientUrl() + "/api/data/v9.0/" + action, true);
+                req.setRequestHeader("OData-MaxVersion", "4.0");
+                req.setRequestHeader("OData-Version", "4.0");
+                req.setRequestHeader("Accept", "application/json");
+                req.setRequestHeader("Content-Type", "application/json; charset=utf-8");
+                req.onreadystatechange = function () {
+                    if (this.readyState === 4) {
+                        req.onreadystatechange = null;
+                        if (this.status === 204) {
+                            callback(req);
+                        } else {
+                            callback(req);
+                        }
+                    }
+                };
+                req.send(JSON.stringify(data));
+            }
+
+            $scope.onLoad();
+        }]);
+
+    </script>
+
+</head>
+<body class="container-fluid" ng-app="app" ng-controller="share">
+    <div id='loading' style='position:fixed;width:100%;height:100%;background-color:#9999; z-index:999;display: none;top: 0;left: 0;right: 0;bottom: 0;'>
+        <div class="loader" style='position:fixed;top:20%;left:55%;margin-left:-190px;z-index:9999;'></div>
+    </div>
+    <div style="height:87vh; overflow:hidden; overflow-y: auto;">
+        <div class="row">
+            <div class="col-sm-12">
+                <h4>Compartilhar</h4>
+                <p class="fw-light">
+                    Escolha os usuários ou a equipe com os quais você deseja compartilhar o registro e forneça as permissões específicas a eles.
+                </p>
+            </div>
+        </div>
+
+        <div class="row mb-2">
+            <div class="col-sm-12">
+                <button type="button" class="btn btn-light btn-sm" ng-click="addUsers();">
+                    <i class="fa fa-user-plus" aria-hidden="true"></i>&nbsp;Adicionar usuário/equipe
+                </button>
+                <button type="button" class="btn btn-light btn-sm" ng-click="removerSelecao();">
+                    <i class="fa fa-times" aria-hidden="true"></i>&nbsp;Remover selecionados
+                </button>
+                <button type="button" class="btn btn-light btn-sm" ng-click="removerTodos();">
+                    <i class="fa fa-repeat" aria-hidden="true"></i>&nbsp;Remover tudo
+                </button>
+            </div>
+        </div>
+
+        <div id="table" class="row">
+            <div class="col-sm-12">
+                <!--Lista de acessos-->
+                <table class="table">
+                    <caption style="text-align:center;" ng-show="listaDeAcessos.length < 1">Este registro não está compartilhado.</caption>
+                    <thead class="table-light">
+                        <tr>
+                            <th scope="col">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" ng-change="selecionarTudo()" ng-model="selecionar_tudo" value="" id="cbxSelectAll">
+                                    <label class="form-check-label" for="cbxSelectAll">
+                                        Nome
+                                    </label>
+                                </div>
+                            </th>
+                            <th scope="col">Ler</th>
+                            <th scope="col">Gravar</th>
+                            <th scope="col">Excluir</th>
+                            <th scope="col">Acrescentar</th>
+                            <th scope="col">Atribuir</th>
+                            <th scope="col">Compartilhar</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr ng-repeat="item in listaDeAcessos">
+                            <th scope="row">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" ng-model="item.selecionado" value="" id="cbxSelect{{$index}}">
+                                    <label class="form-check-label" for="cbxSelect{{$index}}">
+                                        <i class="fa {{item.type == 'systemuser'? 'fa-user':'fa-users'}}" aria-hidden="true"></i>&nbsp;
+                                        {{item.name}}
+                                    </label>
+                                </div>
+                            </th>
+                            <td>
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" ng-model="item.read" ng-change="validarSelecao(item)" id="cbxLer{{$index}}">
+                                    <label class="form-check-label" for="cbxLer{{$index}}"></label>
+                                </div>
+                            </td>
+                            <td>
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" ng-model="item.write" ng-change="validarSelecao(item)" id="cbxGravar{{$index}}">
+                                    <label class="form-check-label" for="cbxGravar{{$index}}"></label>
+                                </div>
+                            </td>
+                            <td>
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" ng-model="item.delete" ng-change="validarSelecao(item)" id="cbxExcluir{{$index}}">
+                                    <label class="form-check-label" for="cbxExcluir{{$index}}"></label>
+                                </div>
+                            </td>
+                            <td>
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" ng-model="item.add" ng-change="validarSelecao(item)" id="cbxAdd{{$index}}">
+                                    <label class="form-check-label" for="cbxAdd{{$index}}"></label>
+                                </div>
+                            </td>
+                            <td>
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" disabled ng-model="item.assign" ng-change="validarSelecao(item)" id="cbxAtribuir{{$index}}">
+                                    <label class="form-check-label" for="cbxAtribuir{{$index}}"></label>
+                                </div>
+                            </td>
+                            <td>
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" ng-model="item.share" ng-change="validarSelecao(item)" id="cbxPartilhar{{$index}}">
+                                    <label class="form-check-label" for="cbxPartilhar{{$index}}"></label>
+                                </div>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-footer">
+        <div class="row">
+            <div class="col-sm-12 text-right">
+                <button type="button" class="btn btn-primary" ng-click="compartilhar();">
+                    <i class="fa fa-floppy-o" aria-hidden="true"></i>&nbsp;Compartilhar
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!--Modals-->
+    <div id="modalConsultar" class="modal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Consultar Registros</h5>
+                    <button type="button" class="btn-close" id="close_modal" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="fw-light">Insira seus critérios de pesquisa.</p>
+                    <div class="row">
+                        <div class="col-sm-5">
+                            <div class="btn-group" role="group" aria-label="Procurar em">
+                                <input type="radio" class="btn-check" name="btnradio" id="btnradio1" autocomplete="off" ng-click="listarUsuarios()" checked>
+                                <label class="btn btn-outline-primary" for="btnradio1">Usuários</label>
+
+                                <input type="radio" class="btn-check" name="btnradio" id="btnradio2" autocomplete="off" ng-click="listarEquipes()">
+                                <label class="btn btn-outline-primary" for="btnradio2">Equipes</label>
+                            </div>
+                        </div>
+                        <div class="col-sm-7">
+                            <div class="input-group mb-3">
+                                <input type="text" ng-model="pesquisa" class="form-control" placeholder="Pesquisar" aria-label="Pesquisar" aria-describedby="basic-addon2">
+                                <span class="input-group-text" id="basic-addon2">
+                                    <i class="fa fa-search" aria-hidden="true"></i>
+                                </span>
+                            </div>
+                        </div>
+                        <div class="col-sm-12">
+                            <table class="table table-sm fixed_header row">
+                                <caption ng-show="listaDeUsuarios.length == 0 && listaDeEquipes.length == 0">
+                                    Você não tem permissões para realizar esta ação.
+                                </caption>
+                                <thead>
+                                    <tr class="d-flex">
+                                        <th class="col" scope="col">Nome</th>
+                                        <th class="col" scope="col" ng-if="listaDeUsuarios.length>0 && tipoRegistro == 'USER'">Email</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr class="d-flex" ng-repeat="item in listaDeUsuarios |filter:pesquisa|orderBy:'fullname'" ng-if="tipoRegistro == 'USER'">
+                                        <th class="col" scope="row">
+                                            <div class="form-check">
+                                                <input class="form-check-input" type="checkbox" ng-change="obterSelecionados()" ng-model="item.selecionado" value="" id="flexCheckDefault{{$index}}">
+                                                <label class="form-check-label" for="flexCheckDefault{{$index}}">
+                                                    {{item.fullname}}
+                                                </label>
+                                            </div>
+                                        </th>
+                                        <td class="col">{{item.internalemailaddress}}</td>
+                                    </tr>
+                                    <tr class="d-flex" ng-repeat="item in listaDeEquipes |filter:pesquisa|orderBy:'name'" ng-if="tipoRegistro == 'TEAM'">
+                                        <th class="col" scope="row">
+                                            <div class="form-check">
+                                                <input class="form-check-input" type="checkbox" ng-change="obterSelecionados()" ng-model="item.selecionado" value="" id="flexCheckDefault{{$index}}">
+                                                <label class="form-check-label" for="flexCheckDefault{{$index}}">
+                                                    {{item.name}}
+                                                </label>
+                                            </div>
+                                        </th>
+                                    </tr>
+                                </tbody>
+                            </table>
+                            <small class="fw-light" ng-if="tipoRegistro == 'USER'">
+                                {{listaDeUsuarios.length}} Usuários
+                            </small>
+                            <small class="fw-light" ng-if="tipoRegistro == 'TEAM'">
+                                {{listaDeEquipes.length}} Equipes
+                            </small>
+                        </div>
+                        <div class="col-sm-12 mt-2">
+                            <span class="fw-normal float-end">
+                                {{qtdSelecionado}} registros selecionados
+                            </span>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" ng-click="associarRegistros(true)">Cancelar</button>
+                    <button type="button" class="btn btn-primary" ng-click="associarRegistros()">Adicionar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</body>
+</html>
