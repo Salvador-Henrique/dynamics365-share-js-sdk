@@ -18,6 +18,13 @@ namespace CodeClimate
      {
         string x = variavel;
         string nomecomerro= "erro";
+       
+       //Validar Code QA complexidade
+       if (x == variavel) variavel = nomecomerro;
+       else if (nomecomerro == x) nomecomerro = x;
+       else if (x == variavel && x == nomecomerro) x = string.empty;
+       else 
+         x = "nobody";
         
        Console.WriteLine($"Saida {x}, {nomecomerro}");
      }
