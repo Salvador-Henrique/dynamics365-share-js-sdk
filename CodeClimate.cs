@@ -11,6 +11,7 @@ namespace CodeClimate
         string x = variavel;
         string nomecomerro= "erro";
         
+        Console.WriteLine($"Saida {x}, {nomecomerro}");
      }
     
      public void MetodoDuplicado(string variavel)
@@ -18,6 +19,7 @@ namespace CodeClimate
         string x = variavel;
         string nomecomerro= "erro";
         
+       Console.WriteLine($"Saida {x}, {nomecomerro}");
      }
   
   }
