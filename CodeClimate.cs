@@ -12,6 +12,13 @@ namespace CodeClimate
         string nomecomerro= "erro";
         
      }
+    
+     public void MetodoDuplicado(string variavel)
+     {
+        string x = variavel;
+        string nomecomerro= "erro";
+        
+     }
   
   }
 }
